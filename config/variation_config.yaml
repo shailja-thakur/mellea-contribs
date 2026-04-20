@@ -1,22 +1,28 @@
 # Variation Testing Configuration
 #
-# Controls how problem variations are generated and tested.
-# All models run via Ollama — no cloud API keys required.
+# Single source of truth for all models, backends, and test parameters.
+
+# ====================
+# Backend
+# ====================
+
+backend: "ollama"
+  # Backend for the m-program under test (e.g. ollama, openai, watsonx)
 
 # ====================
 # Models
 # ====================
 
-target_model: "granite3.3:8b"
-  # Ollama model for the m-program under test
+target_model: "qwen2.5:3b"
+  # Model for the m-program under test
   # Run: ollama pull granite3.3:8b
 
 variation_model: "mistral:7b"
   # Model for generating and validating problem variations
   # Run: ollama pull mistral:7b
 
-judge_model: "llama3.1:8b"
-  # Larger model for evaluating answers
+judge_model: "mistral:7b"
+  # Model for evaluating answers
   # Run: ollama pull llama3.1:8b
 
 # ====================
@@ -32,7 +38,7 @@ variation_types: "linguistic,referential,pragmatic"
   #            persona, long_context, constraint_targeted
 
 # ====================
-# Ollama Connection
+# Connection
 # ====================
 
 ollama_url: "http://localhost:11434"
@@ -52,6 +58,3 @@ _advanced:
 
   use_llm_judge: false
     # true: use LLM to evaluate answers (better for natural language targets)
-
-  target_model: "granite3.3:8b"
-    # Model used when no m-program is provided (ignored otherwise)

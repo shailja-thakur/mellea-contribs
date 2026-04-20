@@ -89,9 +89,10 @@ def test_m_program_robustness(input_file: str, cli_overrides: dict = None):
     if cli_overrides:
         config.update(cli_overrides)
 
-    target_model = config.pop('target_model', config.pop('model', config.pop('backend_model', 'granite3.3:8b')))
-    variation_model = config.get('variation_model', config.get('gen_model', 'qwen2.5:3b'))
-    judge_model = config.get('judge_model', 'mistral:7b')
+
+    target_model = config.pop('target_model', config.pop('model', config.pop('backend_model', None)))
+    variation_model = config.get('variation_model', config.get('gen_model'))
+    judge_model = config.get('judge_model', variation_model)
     num_variations = config.get('num_variations', 10)
 
     # keep gen_model key aligned for variation_engine internals
@@ -108,7 +109,7 @@ def test_m_program_robustness(input_file: str, cli_overrides: dict = None):
     try:
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             session = start_session(
-                backend_name="ollama", model_id=target_model,
+                backend_name=config.get('backend', 'ollama'), model_id=target_model,
                 model_options={ModelOption.TEMPERATURE: 0.1})
     except Exception as e:
         print(f"{R}Cannot connect to Ollama or start session: {e}{X}")
@@ -222,11 +223,11 @@ def parse_args():
                    default=str(Path(__file__).parent / 'data' / 'sample_5problems.json'),
                    help='Unit test JSON file (default: test/data/sample_5problems.json)')
     p.add_argument('--target-model', type=str, default=None,
-                   help='Ollama model for the m-program under test (default: granite3.3:8b)')
+                   help='Model for the m-program under test (default: from variation_config.yaml)')
     p.add_argument('--variation-model', type=str, default=None,
-                   help='Model for generating problem variations — supports client/model e.g. groq/llama-3.3-70b-versatile (default: qwen2.5:3b)')
+                   help='Model for generating problem variations — supports client/model e.g. groq/llama-3.3-70b-versatile (default: from variation_config.yaml)')
     p.add_argument('--judge-model', type=str, default=None,
-                   help='Model for answer evaluation (default: ministral-3:3b)')
+                   help='Model for answer evaluation (default: from variation_config.yaml)')
     p.add_argument('--num-variations', type=int, default=None,
                    help='Number of variations to generate per problem (default: 10)')
     p.add_argument('--variation-types', type=str, default=None,

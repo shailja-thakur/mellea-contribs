@@ -8,8 +8,10 @@ import logging
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+import yaml
 from mellea import MelleaSession
 
 from benchdrift.pipeline.feature_relevance import (
@@ -36,6 +38,18 @@ from benchdrift.models.model_client import ModelClientFactory
 logger = logging.getLogger(__name__)
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 VALID_CLIENTS = {'ollama', 'groq', 'rits', 'vllm', 'openai'}
+
+_CONFIG_PATH = Path(__file__).parent.parent.parent / 'config' / 'variation_config.yaml'
+
+
+def _load_variation_config() -> dict:
+    """Load variation_config.yaml as the single source of model/param defaults."""
+    with open(_CONFIG_PATH, 'r') as f:
+        cfg = yaml.safe_load(f)
+    result = {k: v for k, v in cfg.items() if k != '_advanced'}
+    if isinstance(cfg.get('_advanced'), dict):
+        result['_advanced'] = cfg['_advanced']
+    return result
 
 
 def _parse_model_spec(spec: str) -> tuple:
@@ -123,8 +137,9 @@ def generate_variants(baseline: str, target: str, config: dict) -> list[dict]:
     Returns a list of dicts with keys: variation_type, variant_text.
     Use eval_and_score() to test each variant through your m-program.
     """
-    gen_model = config.get('gen_model', 'qwen3:8b')
-    ollama_url = config.get('ollama_url', OLLAMA_BASE_URL)
+    _defaults = _load_variation_config()
+    gen_model = config.get('gen_model', _defaults.get('variation_model', 'qwen3:8b'))
+    ollama_url = config.get('ollama_url', _defaults.get('ollama_url', OLLAMA_BASE_URL))
     timeout = config.get('timeout', 120)
     no_enrich = config.get('quick_mode', config.get('no_enrich', False))
     skip_validation = config.get('skip_validation', False)
@@ -334,11 +349,12 @@ def test_with_variations(
         raise ValueError("config_overrides is required.")
 
     advanced = config_overrides.get('_advanced', {}) if isinstance(config_overrides.get('_advanced'), dict) else {}
+    _defaults = _load_variation_config()
 
-    gen_model = config_overrides.get('gen_model', 'qwen3:8b')
-    judge_model = config_overrides.get('judge_model', gen_model)
-    target_model = advanced.get('target_model', config_overrides.get('target_model', 'granite3.3:8b'))
-    top_k = config_overrides.get('num_variations', config_overrides.get('top_k', 10))
+    gen_model = config_overrides.get('gen_model', _defaults.get('variation_model'))
+    judge_model = config_overrides.get('judge_model', _defaults.get('judge_model', gen_model))
+    target_model = advanced.get('target_model', config_overrides.get('target_model', _defaults.get('target_model')))
+    top_k = config_overrides.get('num_variations', config_overrides.get('top_k', _defaults.get('num_variations', 10)))
     use_axes = config_overrides.get('variation_types', config_overrides.get('use_axes',
                             advanced.get('variation_types',
                             'linguistic,referential,pragmatic,structural,constraint_targeted')))

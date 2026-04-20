@@ -11,6 +11,7 @@ Run:
 import sys, os, io, json, contextlib, argparse, logging
 from pathlib import Path
 from datetime import datetime
+import yaml
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 from mellea import start_session
@@ -21,6 +22,10 @@ from mellea_contribs.tools.variation_engine import test_with_variations, analyze
 G, R, Y, D, B, X = "\033[92m", "\033[91m", "\033[93m", "\033[2m", "\033[1m", "\033[0m"
 
 DEFAULT_INPUT = str(Path(__file__).parent.parent.parent / 'test' / 'data' / 'sample_5problems.json')
+
+_cfg_path = Path(__file__).parent.parent.parent / 'config' / 'variation_config.yaml'
+with open(_cfg_path) as _f:
+    _cfg = yaml.safe_load(_f)
 
 
 def suppress_noise():
@@ -38,11 +43,15 @@ def suppress_noise():
     os.environ['MELLEA_LOG_LEVEL'] = 'CRITICAL'
 
 
-def main(input_file: str, target_model: str = "granite3.3:8b",
-         variation_model: str = "mistral:7b", judge_model: str = "llama3.1:8b",
-         num_variations: int = 5):
+def main(input_file: str, target_model: str = None,
+         variation_model: str = None, judge_model: str = None,
+         num_variations: int = None):
 
     suppress_noise()
+    target_model = target_model or _cfg['target_model']
+    variation_model = variation_model or _cfg['variation_model']
+    judge_model = judge_model or _cfg.get('judge_model', variation_model)
+    num_variations = num_variations or _cfg.get('num_variations', 5)
     tests = TestBasedEval.from_json_file(input_file)
     samples = []
     for test in tests:
@@ -62,7 +71,7 @@ def main(input_file: str, target_model: str = "granite3.3:8b",
     print(f"  Input file       : {input_file}  ({len(samples)} problems)")
     print(f"{'─' * 70}")
 
-    session = start_session(backend_name="ollama", model_id=target_model,
+    session = start_session(backend_name=_cfg.get('backend', 'ollama'), model_id=target_model,
                             model_options={ModelOption.TEMPERATURE: 0.1})
 
     def my_program(question: str) -> str:
@@ -137,9 +146,9 @@ def main(input_file: str, target_model: str = "granite3.3:8b",
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument('--input-file', default=DEFAULT_INPUT)
-    p.add_argument('--target-model', default='granite3.3:8b', help='Model for the m-program under test')
-    p.add_argument('--variation-model', default='mistral:7b', help='Model for generating and validating problem variations')
-    p.add_argument('--judge-model', default='llama3.1:8b', help='Model for evaluating answers')
-    p.add_argument('--num-variations', type=int, default=5)
+    p.add_argument('--target-model', default=None, help='Model for the m-program under test (default: from variation_config.yaml)')
+    p.add_argument('--variation-model', default=None, help='Model for generating and validating problem variations (default: from variation_config.yaml)')
+    p.add_argument('--judge-model', default=None, help='Model for evaluating answers (default: from variation_config.yaml)')
+    p.add_argument('--num-variations', type=int, default=None)
     args = p.parse_args()
     main(args.input_file, args.target_model, args.variation_model, args.judge_model, args.num_variations)

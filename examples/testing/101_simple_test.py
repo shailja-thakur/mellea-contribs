@@ -9,6 +9,7 @@ Run:
 import sys, os, io, json, contextlib, logging
 from pathlib import Path
 from datetime import datetime
+import yaml
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 from mellea import start_session
@@ -16,6 +17,10 @@ from mellea.backends import ModelOption
 from mellea_contribs.tools.variation_engine import test_with_variations, analyze_robustness
 
 G, R, Y, D, B, X = "\033[92m", "\033[91m", "\033[93m", "\033[2m", "\033[1m", "\033[0m"
+
+_cfg_path = Path(__file__).parent.parent.parent / 'config' / 'variation_config.yaml'
+with open(_cfg_path) as _f:
+    _cfg = yaml.safe_load(_f)
 
 # Suppress mellea/BenchDrift noise
 for _name in ['BenchDrift', 'benchdrift', 'mellea_contribs', 'mellea',
@@ -33,7 +38,7 @@ os.environ['MELLEA_LOG_LEVEL'] = 'CRITICAL'
 
 # Step 1: Start a Mellea session (the m-program under test)
 with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-    session = start_session(backend_name="ollama", model_id="granite3.3:8b",
+    session = start_session(backend_name=_cfg.get('backend', 'ollama'), model_id=_cfg['target_model'],
                             model_options={ModelOption.TEMPERATURE: 0.1})
 
 # Step 2: Define your m-program
@@ -73,7 +78,7 @@ variations = test_with_variations(
     expected_answer=expected_answer,
     program=my_program,
     mellea_session=session,
-    config_overrides={"gen_model": "mistral:7b", "num_variations": 5, "no_enrich": True},
+    config_overrides={"gen_model": _cfg['variation_model'], "num_variations": _cfg.get('num_variations', 5), "no_enrich": True},
     progress_callback=on_progress,
 )
 
