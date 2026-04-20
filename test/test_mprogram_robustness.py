@@ -1,50 +1,44 @@
 """
-Robustness test for a Mellea m-program using BenchDrift variations.
+Robustness test for a Mellea m-program using problem variations.
 
-Generates semantic variations of a problem, tests each through the m-program,
-and reports pass/fail with color-coded output.
+Your m-program may pass a unit test and still be fragile. For example:
 
-    python test_mprogram_robustness.py --top-k 5 --no-enrich
-    python test_mprogram_robustness.py --backend-model mistral:7b --top-k 3
-    python test_mprogram_robustness.py --gen-model qwen3:8b --use-axes all
+  - It answers correctly when numbers are given as digits ("22 people")
+    but fails when phrased as words ("twenty-two people")         → format sensitivity
+  - It handles a direct question but breaks when the same problem
+    is framed as a story or hypothetical                          → phrasing sensitivity
+  - It gets the right answer on the example but fails when
+    constraints are reordered or combined differently             → structural sensitivity
+
+A human writing unit tests would vary the inputs but always preserve the prompt
+structure. Variation testing finds something harder to catch: the model passing
+on the full structured prompt but breaking when the same question arrives with
+different surface form — a dependency a developer would never think to test for.
+
+    python test_mprogram_robustness.py --input-file test/data/sample_5problems.json
+    python test_mprogram_robustness.py --input-file test/data/sample_5problems.json --model mistral:7b --num-variations 3
+    python test_mprogram_robustness.py --input-file test/data/sample_5problems.json --gen-model qwen3:8b --quick
 """
-import sys
-import os
-import re
-import io
-import contextlib
-import argparse
-import logging
+import sys, os, io, json, contextlib, argparse, logging
 from typing import Any
+from pathlib import Path
+from datetime import datetime
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 import yaml
-from pathlib import Path
-
 from mellea import start_session
-try:
-    from mellea.backends.types import ModelOption
-except ImportError:
-    from mellea.backends import ModelOption
-from mellea_contribs.tools.benchdrift_runner import (
-    run_benchdrift_pipeline,
-    analyze_robustness,
-)
+from mellea.backends import ModelOption
+from mellea.stdlib.components.unit_test_eval import TestBasedEval
+from mellea_contribs.tools.variation_engine import test_with_variations, analyze_robustness
 
-# ANSI
-G = "\033[92m"   # green
-R = "\033[91m"   # red
-Y = "\033[93m"   # yellow
-D = "\033[2m"    # dim
-B = "\033[1m"    # bold
-X = "\033[0m"    # reset
+G, R, Y, D, B, X = "\033[92m", "\033[91m", "\033[93m", "\033[2m", "\033[1m", "\033[0m"
 
 
-def _suppress_noise():
+def suppress_noise():
     for name in ['BenchDrift', 'benchdrift', 'mellea_contribs', 'mellea',
-                 'httpx', 'httpcore', 'urllib3', 'requests']:
+                 'httpx', 'httpcore', 'urllib3', 'requests', 'fancy_logger']:
         logging.getLogger(name).setLevel(logging.CRITICAL)
     logging.getLogger().setLevel(logging.CRITICAL)
     try:
@@ -52,257 +46,203 @@ def _suppress_noise():
         fl = FancyLogger.get_logger()
         fl.setLevel(logging.CRITICAL)
         fl.handlers = []
+        fl.propagate = False
     except Exception:
         pass
     os.environ['TQDM_DISABLE'] = '1'
+    os.environ['MELLEA_LOG_LEVEL'] = 'CRITICAL'
 
 
-def _extract_answer(response: Any) -> str:
-    text = str(response)
-    m = re.search(r'<answer>(.*?)</answer>', text, re.DOTALL | re.IGNORECASE)
-    if m:
-        return m.group(1).strip()
-    for pat in [
-        r'(?:total\s+cost|total|answer|result)\s*(?:is|=|:)\s*\$?([\d,]+\.?\d*)',
-        r'=\s*\$?([\d,]+\.?\d*)\s*$',
-        r'\*\*\$?([\d,]+\.?\d*)\*\*',
-    ]:
-        matches = re.findall(pat, text, re.IGNORECASE | re.MULTILINE)
-        if matches:
-            return '$' + matches[-1].replace(',', '')
-    dollars = re.findall(r'\$([\d,]+\.?\d*)', text)
-    if dollars:
-        return '$' + dollars[-1].replace(',', '')
-    nums = re.findall(r'-?\d+\.?\d*', text)
-    if nums:
-        return nums[-1]
-    return text.strip()[:40]
+def load_samples(path: str) -> list[dict]:
+    """Load unit test JSON → list of {input_id, name, input, target}."""
+    tests = TestBasedEval.from_json_file(path)
+    samples = []
+    for test in tests:
+        for i, input_text in enumerate(test.inputs):
+            target_list = test.targets[i] if i < len(test.targets) else []
+            target = target_list[0] if target_list else ""
+            if not input_text or not target:
+                continue
+            samples.append({
+                'input_id': test.input_ids[i] if i < len(test.input_ids) else f"{test.test_id}.{i}",
+                'name': test.name,
+                'input': input_text,
+                'target': target,
+            })
+    return samples
 
 
-def test_m_program_robustness(cli_overrides=None):
-    _suppress_noise()
+def test_m_program_robustness(input_file: str, cli_overrides: dict = None):
+    suppress_noise()
 
-    # --- Problem ---
-    baseline_question = """RULES:
-You are calculating total cost for a catering order.
-Base price is $15 per person.
-Groups of 20 or more get a 10% discount.
-Weekend events have a $50 surcharge.
-Delivery within 10 miles is free, beyond that costs $2 per mile.
+    samples = load_samples(input_file)
+    if not samples:
+        print(f"{R}No valid samples in {input_file}{X}")
+        return
 
-EXAMPLES:
-- 15 people, weekday, 5 miles: 15 × $15 = $225
-- 25 people, weekend, 8 miles: (25 × $15 × 0.9) + $50 = $387.50
-- 30 people, weekday, 15 miles: (30 × $15 × 0.9) + (5 × $2) = $415
-
-QUESTION:
-A company is ordering catering for 22 people for a Saturday event. The venue is 12 miles away. What is the total cost?"""
-    ground_truth = "$351"
-
-    # --- Config ---
-    config_path = Path(__file__).parent.parent / 'config' / 'benchdrift_config.yaml'
+    config_path = Path(__file__).parent.parent / 'config' / 'variation_config.yaml'
     with open(config_path, 'r') as f:
         cfg = yaml.safe_load(f)
-    config = {k: v for k, v in cfg.items() if isinstance(v, (str, int, float, bool))}
+    config = {k: v for k, v in cfg.items() if k != '_advanced'}
+    if '_advanced' in cfg and isinstance(cfg['_advanced'], dict):
+        config['_advanced'] = cfg['_advanced']
     if cli_overrides:
         config.update(cli_overrides)
 
-    backend_model = config.pop('backend_model', 'granite3.3:8b')
-    gen_model = config.get('gen_model', 'qwen3:8b')
-    target_model = config.get('target_model', backend_model)
-    top_k = config.get('top_k', 10)
-    axes = config.get('use_axes', 'linguistic,referential,pragmatic,structural,constraint_targeted')
-    enrich = 'on' if not config.get('no_enrich', False) else 'off'
+    target_model = config.pop('target_model', config.pop('model', config.pop('backend_model', 'granite3.3:8b')))
+    variation_model = config.get('variation_model', config.get('gen_model', 'qwen2.5:3b'))
+    judge_model = config.get('judge_model', 'mistral:7b')
+    num_variations = config.get('num_variations', 10)
 
-    # --- Header ---
-    print(f"\n{B}BenchDrift — M-Program Robustness Test{X}")
+    # keep gen_model key aligned for variation_engine internals
+    config['gen_model'] = variation_model
+
+    print(f"\n{B}Testing M-Program with Problem Variations{X}")
     print(f"{'─' * 70}")
-    print(f"  Model under test : {B}{backend_model}{X}")
-    print(f"  Ground truth     : {ground_truth}")
+    print(f"  Target model     : {B}{target_model}{X}")
+    print(f"  Variation model  : {variation_model}  |  judge: {judge_model}")
+    print(f"  Variations       : {num_variations}")
+    print(f"  Input file       : {input_file}  ({len(samples)} samples)")
     print(f"{'─' * 70}")
 
-    # --- Mellea session ---
     try:
-        with contextlib.redirect_stdout(io.StringIO()), \
-             contextlib.redirect_stderr(io.StringIO()):
-            m = start_session(
-                backend_name="ollama", model_id=backend_model,
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            session = start_session(
+                backend_name="ollama", model_id=target_model,
                 model_options={ModelOption.TEMPERATURE: 0.1})
     except Exception as e:
-        print(f"{R}Failed to start Mellea session: {e}{X}")
-        print(f"Ensure: ollama serve && ollama pull {backend_model}")
+        print(f"{R}Cannot connect to Ollama or start session: {e}{X}")
+        print(f"\nMake sure Ollama is running:")
+        print(f"  ollama serve")
+        print(f"\nThen install the model:")
+        print(f"  ollama pull {target_model}")
         return
 
-    # --- M-program ---
-    call_count = [0]
+    all_results = []
 
-    def m_program(question: str) -> Any:
-        call_count[0] += 1
-        with contextlib.redirect_stdout(io.StringIO()), \
-             contextlib.redirect_stderr(io.StringIO()):
-            response = m.instruct(question)
-        return response.value if hasattr(response, 'value') else response
+    for i, sample in enumerate(samples):
+        print(f"\n{B}[{i+1}/{len(samples)}] {sample['name']} — {sample['input_id']}{X}")
+        print(f"  {D}problem : {sample['input']}{X}")
+        print(f"  {D}expected: {sample['target']}{X}")
+        print(f"{'─' * 70}")
 
-    # --- Progress display ---
-    _out = sys.stdout
+        call_count = [0]
+        variation_counter = [0]
 
-    _spinner = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏']
-    _spin_idx = [0]
+        def program(question: str) -> Any:
+            call_count[0] += 1
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                response = session.instruct(question)
+            return response.value if hasattr(response, 'value') else response
 
-    def on_progress(current, total, status, entry):
-        if status == "baseline":
-            ans = _extract_answer(entry.get('variant_answer', '?'))
-            ok = entry.get('correct', False)
-            c = G if ok else R
-            _out.write(f"\r  Baseline: {c}{ans}{X}  |  generating 0/{total} variations...")
-            _out.flush()
-            return
-        elif status == "waiting":
-            s = _spinner[_spin_idx[0] % len(_spinner)]
-            _spin_idx[0] += 1
-            _out.write(f"\r  {D}{s} generating variations...{X}   ")
-            _out.flush()
-            return
-        elif status in ("skip", "invalid"):
-            pct = int(current / total * 100)
-            _out.write(f"\r  [{pct:3d}%] {current}/{total}  {D}{status}: {entry.get('variation_type','')}{X}   ")
-            _out.flush()
-        else:
-            pct = int(current / total * 100)
-            ans = _extract_answer(entry.get('variant_answer', '?'))
-            c = G if status == "PASS" else R
-            _out.write(f"\r  [{pct:3d}%] {current}/{total}  {c}{ans:20s}{X}  {status}   ")
-            _out.flush()
+        _out = sys.stdout
 
-    # --- Run ---
-    _captured_err = io.StringIO()
-    try:
-        with contextlib.redirect_stdout(io.StringIO()), \
-             contextlib.redirect_stderr(_captured_err):
-            probes = run_benchdrift_pipeline(
-                baseline_problem=baseline_question,
-                ground_truth_answer=ground_truth,
-                m_program_callable=m_program,
-                mellea_session=m,
-                answer_extractor=_extract_answer,
-                config_overrides=config,
+        def on_progress(current, total, status, entry):
+            if status == "baseline":
+                c = G if entry.get('correct') else R
+                _out.write(f"  Baseline  {c}{'PASS' if entry.get('correct') else 'FAIL'}{X}\n")
+                _out.flush()
+            elif status in ("PASS", "FAIL"):
+                variation_counter[0] += 1
+                c = G if status == "PASS" else R
+                vtype = entry.get('variation_type', '')
+                _out.write(f"  Variation {variation_counter[0]}/{total}  {D}[{vtype}]{X}  {c}{status}{X}\n")
+                _out.flush()
+
+        try:
+            variations = test_with_variations(
+                problem=sample['input'],
+                expected_answer=sample['target'],
+                program=program,
+                mellea_session=session,
+                config_overrides=config.copy(),
                 progress_callback=on_progress,
             )
-    except Exception as e:
-        print(f"\n{R}Pipeline failed: {e}{X}")
-        err_output = _captured_err.getvalue()
-        if err_output:
-            print(f"{D}{err_output[:500]}{X}")
-        import traceback; traceback.print_exc()
-        return
-
-    _out.write("\r" + " " * 80 + "\r")
-    _out.flush()
-
-    if not probes or len(probes) <= 1:
-        print(f"\n{R}No variations generated. Check that gen-model is available:{X}")
-        print(f"  ollama pull {gen_model}")
-        err_output = _captured_err.getvalue()
-        if err_output:
-            print(f"{D}{err_output[:300]}{X}")
-        return
-
-    # --- Results ---
-    print(f"{B}Results{X}")
-    print(f"{'─' * 70}")
-
-    bl = probes[0]
-    bl_ans = _extract_answer(bl['variant_answer'])
-    bl_ok = bl['correct']
-    print(f"  {B}{'Baseline':30s}{X}  {(G if bl_ok else R)}{bl_ans:20s}{X}  {'PASS' if bl_ok else 'FAIL'}")
-
-    for p in probes[1:]:
-        if not p.get('is_variant'):
+        except Exception as e:
+            print(f"{R}Failed: {e}{X}")
             continue
-        ok = p.get('correct', False)
-        c = G if ok else R
-        label = "PASS" if ok else "FAIL"
-        trans = p.get('variation_type', '?')
-        ans = _extract_answer(p.get('variant_answer', '?'))
-        print(f"  {trans:30s}  {c}{ans:20s}{X}  {c}{label}{X}")
 
-    # --- Summary ---
-    report = analyze_robustness(probes)
-    pr = report['pass_rate']
-    pc = G if pr >= 0.7 else (Y if pr >= 0.4 else R)
+        if not variations or len(variations) <= 1:
+            print(f"{R}No variations generated for this problem.{X}")
+            print(f"\nPossible causes:")
+            print(f"  1. Variation model not installed: ollama pull {variation_model}")
+            print(f"  2. Problem may be too short — try a more detailed problem")
+            print(f"  3. Try --quick to skip enrichment and generate faster\n")
+            continue
 
-    print(f"{'─' * 70}")
-    print(f"  Pass rate: {pc}{B}{pr:.0%}{X}  ({report['passed']}/{report['total']})"
-          f"  |  baseline: {'PASS' if report['baseline_correct'] else 'FAIL'}"
-          f"  |  calls: {call_count[0]}")
+        report = analyze_robustness(variations)
+        pc = G if report['pass_rate'] >= 0.7 else (Y if report['pass_rate'] >= 0.4 else R)
+        print(f"{'─' * 70}")
+        print(f"  Pass rate: {pc}{B}{report['pass_rate']:.0%}{X}"
+              f"  ({report['passed']}/{report['total']})"
+              f"  |  baseline: {'PASS' if report['baseline_correct'] else 'FAIL'}")
+        failed_types = [t for t, r in report['by_variation_type'].items() if r < 1.0]
+        if failed_types:
+            print(f"  {Y}Your m-program is sensitive to: {', '.join(failed_types)}{X}")
 
-    # --- Save results ---
-    import json
-    from datetime import datetime
-    output_dir = Path(__file__).parent.parent / 'logs'
-    output_dir.mkdir(exist_ok=True)
+        all_results.append({
+            'input_id': sample['input_id'],
+            'name': sample['name'],
+            'summary': report,
+            'variations': variations,
+        })
+        session.reset()
+
+    # --- Aggregate ---
+    if len(all_results) > 1:
+        total_v = sum(r['summary']['total'] for r in all_results)
+        total_p = sum(r['summary']['passed'] for r in all_results)
+        overall = total_p / total_v if total_v else 0.0
+        pc = G if overall >= 0.7 else (Y if overall >= 0.4 else R)
+        print(f"\n{'═' * 70}")
+        print(f"{B}Overall: {pc}{overall:.0%}{X}  ({total_p}/{total_v} variations)  |  "
+              f"baseline: {sum(1 for r in all_results if r['summary']['baseline_correct'])}/{len(all_results)}")
+        print(f"{'═' * 70}\n")
+
+    # --- Save ---
+    out_dir = Path(__file__).parent.parent / 'logs'
+    out_dir.mkdir(exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_file = output_dir / f"robustness_{ts}.json"
-    output_data = {
-        "timestamp": ts,
-        "config": {
-            "backend_model": backend_model,
-            "gen_model": gen_model,
-            "top_k": top_k,
-            "axes": axes,
-            "enrich": enrich,
-            "ground_truth": ground_truth,
-        },
-        "summary": report,
-        "probes": probes,
-    }
-    with open(output_file, 'w') as f:
-        json.dump(output_data, f, indent=2, default=str)
-
-    print(f"  Results saved: {D}{output_file}{X}")
-    print(f"{'─' * 70}\n")
-
-    assert "error" not in report
+    out_file = out_dir / f"robustness_{ts}.json"
+    with open(out_file, 'w') as f:
+        json.dump({
+            "timestamp": ts,
+            "target_model": target_model,
+            "variation_model": variation_model,
+            "judge_model": judge_model,
+            "input_file": input_file,
+            "results": all_results,
+        }, f, indent=2, default=str)
+    print(f"  Results saved: {D}{out_file}{X}\n")
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description='M-program robustness test (BenchDrift)')
-    p.add_argument('--backend-model', type=str, default=None,
-                   help='Ollama model for Mellea m-program (default: granite3.3:8b)')
-    p.add_argument('--gen-model', type=str, default=None,
-                   help='Ollama model for variation generation (default: qwen3:8b)')
-    p.add_argument('--top-k', type=int, default=None,
-                   help='Number of ranked transformations (default: 10)')
-    p.add_argument('--use-axes', type=str, default=None,
-                   help='Taxonomy axes, comma-separated or "all" (default: 5 core axes)')
-    p.add_argument('--no-enrich', action='store_true',
-                   help='Skip LLM feature enrichment (faster)')
+    p = argparse.ArgumentParser(description='Test your m-program robustness with problem variations')
+    p.add_argument('--input-file', type=str,
+                   default=str(Path(__file__).parent / 'data' / 'sample_5problems.json'),
+                   help='Unit test JSON file (default: test/data/sample_5problems.json)')
+    p.add_argument('--target-model', type=str, default=None,
+                   help='Ollama model for the m-program under test (default: granite3.3:8b)')
+    p.add_argument('--variation-model', type=str, default=None,
+                   help='Model for generating problem variations — supports client/model e.g. groq/llama-3.3-70b-versatile (default: qwen2.5:3b)')
     p.add_argument('--judge-model', type=str, default=None,
-                   help='Ollama model for validation + evaluation (default: same as gen-model)')
-    p.add_argument('--skip-validation', action='store_true',
-                   help='Skip variation validation (faster, less filtering)')
-    p.add_argument('--use-llm-judge', action='store_true',
-                   help='Use LLM judge for answer evaluation (slower, more accurate)')
+                   help='Model for answer evaluation (default: ministral-3:3b)')
+    p.add_argument('--num-variations', type=int, default=None,
+                   help='Number of variations to generate per problem (default: 10)')
+    p.add_argument('--variation-types', type=str, default=None,
+                   help='Types of variations, comma-separated or "all" (default: linguistic,referential,pragmatic)')
+    p.add_argument('--quick', action='store_true',
+                   help='Quick mode: skip LLM feature enrichment (faster)')
     return p.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
     overrides = {}
-    if args.backend_model:
-        overrides['backend_model'] = args.backend_model
-    if args.gen_model:
-        overrides['gen_model'] = args.gen_model
-    if args.top_k is not None:
-        overrides['top_k'] = args.top_k
-    if args.use_axes:
-        overrides['use_axes'] = args.use_axes
-    if args.judge_model:
-        overrides['judge_model'] = args.judge_model
-    if args.no_enrich:
-        overrides['no_enrich'] = True
-    if args.skip_validation:
-        overrides['skip_validation'] = True
-    if args.use_llm_judge:
-        overrides['use_llm_judge'] = True
-    test_m_program_robustness(overrides or None)
+    if args.target_model:               overrides['target_model'] = args.target_model
+    if args.variation_model:            overrides['variation_model'] = args.variation_model
+    if args.judge_model:                overrides['judge_model'] = args.judge_model
+    if args.num_variations is not None: overrides['num_variations'] = args.num_variations
+    if args.variation_types:            overrides['variation_types'] = args.variation_types
+    if args.quick:                      overrides.setdefault('_advanced', {})['quick_mode'] = True
+    test_m_program_robustness(args.input_file, overrides or None)

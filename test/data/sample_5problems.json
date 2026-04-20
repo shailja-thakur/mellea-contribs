@@ -1,0 +1,67 @@
+[
+  {
+    "id": "test_math_001",
+    "source": "sample",
+    "name": "math reasoning",
+    "instructions": "1. The response should show clear step-by-step reasoning.\n2. The final answer should be a specific number.\n3. Units should be included where applicable.",
+    "examples": [
+      {
+        "input_id": "test_math_001.1",
+        "input": [{"role": "user", "content": "A store sells apples for $1.50 each and oranges for $2.00 each. If Sarah buys 4 apples and 3 oranges, how much does she spend in total?"}],
+        "targets": [{"role": "assistant", "content": "Sarah spends $12.00 in total. 4 apples at $1.50 each is $6.00, and 3 oranges at $2.00 each is $6.00. $6.00 + $6.00 = $12.00."}]
+      }
+    ]
+  },
+  {
+    "id": "test_causal_001",
+    "source": "sample",
+    "name": "causal reasoning",
+    "instructions": "1. The response should identify the cause-effect relationship clearly.\n2. The response should explain why the effect follows from the cause.\n3. The answer should be concise and logically sound.",
+    "examples": [
+      {
+        "input_id": "test_causal_001.1",
+        "input": [{"role": "user", "content": "A glass of ice water is left on a table on a humid summer day. After a few minutes, water droplets appear on the outside of the glass. Why?"}],
+        "targets": [{"role": "assistant", "content": "The droplets form because the cold glass cools the air immediately around it below its dew point, causing water vapor in the humid air to condense into liquid water on the glass surface. This is condensation, not the glass leaking."}]
+      }
+    ]
+  },
+  {
+    "id": "test_spatial_001",
+    "source": "sample",
+    "name": "spatial reasoning",
+    "instructions": "1. The response should correctly interpret the spatial relationships described.\n2. The answer should specify a clear direction or position.\n3. Brief reasoning should support the answer.",
+    "examples": [
+      {
+        "input_id": "test_spatial_001.1",
+        "input": [{"role": "user", "content": "You are facing north. You turn right, then turn right again, then turn left. What direction are you now facing?"}],
+        "targets": [{"role": "assistant", "content": "You are facing east. Starting north, turning right gives you east, turning right again gives you south, then turning left brings you back to east."}]
+      }
+    ]
+  },
+  {
+    "id": "test_temporal_001",
+    "source": "sample",
+    "name": "temporal reasoning",
+    "instructions": "1. The response should correctly order or compute time-based information.\n2. The answer should be specific and unambiguous.\n3. The reasoning should reference the sequence of events explicitly.",
+    "examples": [
+      {
+        "input_id": "test_temporal_001.1",
+        "input": [{"role": "user", "content": "A train leaves Chicago at 9:00 AM and arrives in Detroit at 1:30 PM. If it makes two stops of 15 minutes each along the way, how long is the train actually moving?"}],
+        "targets": [{"role": "assistant", "content": "The train is actually moving for 4 hours. The total journey is 4 hours 30 minutes (9:00 AM to 1:30 PM). Subtracting two 15-minute stops (30 minutes total) gives 4 hours of actual travel time."}]
+      }
+    ]
+  },
+  {
+    "id": "test_commonsense_001",
+    "source": "sample",
+    "name": "commonsense reasoning",
+    "instructions": "1. The response should provide a clear, direct answer.\n2. The response should include brief reasoning to support the answer.\n3. The answer should be grounded in common sense logic.",
+    "examples": [
+      {
+        "input_id": "test_commonsense_001.1",
+        "input": [{"role": "user", "content": "What's blue and smells like red paint?"}],
+        "targets": [{"role": "assistant", "content": "Blue paint. The color of paint does not affect its smell — blue paint smells like paint, just like red paint does."}]
+      }
+    ]
+  }
+]

@@ -1,0 +1,57 @@
+# Variation Testing Configuration
+#
+# Controls how problem variations are generated and tested.
+# All models run via Ollama — no cloud API keys required.
+
+# ====================
+# Models
+# ====================
+
+target_model: "granite3.3:8b"
+  # Ollama model for the m-program under test
+  # Run: ollama pull granite3.3:8b
+
+variation_model: "mistral:7b"
+  # Model for generating and validating problem variations
+  # Run: ollama pull mistral:7b
+
+judge_model: "llama3.1:8b"
+  # Larger model for evaluating answers
+  # Run: ollama pull llama3.1:8b
+
+# ====================
+# Variation Control
+# ====================
+
+num_variations: 10
+  # How many problem variations to generate and test
+
+variation_types: "linguistic,referential,pragmatic"
+  # Types of variations to generate, comma-separated or "all"
+  # Available: linguistic, referential, pragmatic, structural,
+  #            persona, long_context, constraint_targeted
+
+# ====================
+# Ollama Connection
+# ====================
+
+ollama_url: "http://localhost:11434"
+timeout: 120
+
+# ====================
+# Advanced Settings
+# ====================
+# Only modify these if you need fine-grained control
+
+_advanced:
+  quick_mode: false
+    # true: skip LLM feature enrichment (faster, shallower variation selection)
+
+  skip_validation: false
+    # true: skip semantic validation of generated variations (faster, less filtering)
+
+  use_llm_judge: false
+    # true: use LLM to evaluate answers (better for natural language targets)
+
+  target_model: "granite3.3:8b"
+    # Model used when no m-program is provided (ignored otherwise)
