@@ -6,7 +6,9 @@ answer, and see if it handles semantic variations of that problem correctly.
 Run:
     python examples/testing/101_simple_test.py
 """
-import sys, os, io, contextlib, logging
+import sys, os, io, json, contextlib, logging
+from pathlib import Path
+from datetime import datetime
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 from mellea import start_session
@@ -84,3 +86,11 @@ print(f"  Pass rate: {pc}{B}{report['pass_rate']:.0%}{X}  ({report['passed']}/{r
 failed_types = [t for t, r in report['by_variation_type'].items() if r < 1.0]
 if failed_types:
     print(f"  {Y}Your m-program is sensitive to: {', '.join(failed_types)}{X}")
+
+out_dir = Path(__file__).parent.parent.parent / 'logs'; out_dir.mkdir(exist_ok=True)
+ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+out_file = out_dir / f"robustness_{ts}.json"
+with open(out_file, 'w') as f:
+    json.dump({"timestamp": ts, "problem": problem, "expected_answer": expected_answer,
+               "report": report, "variations": variations}, f, indent=2, default=str)
+print(f"  Saved: {out_file}")

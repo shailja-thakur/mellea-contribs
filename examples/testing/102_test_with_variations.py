@@ -125,6 +125,14 @@ def main(input_file: str, target_model: str = "granite3.3:8b",
         print(f"{B}Overall: {pc}{overall:.0%}{X}  ({total_p}/{total_v} variations)")
         print(f"{'═' * 70}\n")
 
+    out_dir = Path(__file__).parent.parent.parent / 'logs'; out_dir.mkdir(exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_file = out_dir / f"robustness_{ts}.json"
+    with open(out_file, 'w') as f:
+        json.dump({"timestamp": ts, "input_file": input_file, "results": all_results},
+                  f, indent=2, default=str)
+    print(f"  Saved: {out_file}")
+
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
