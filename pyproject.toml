@@ -146,4 +146,4 @@ parser_angular_minor_types = "release"
 parser_angular_patch_types = "fix,perf,feat"
 
 [tool.uv.sources]
-benchdrift = { git = "https://github.com/IBM/BenchDrift.git", rev = "95db1c95b6abbc3b9f9bc177f6a7933c555c7175" }
+benchdrift = { git = "https://github.com/IBM/BenchDrift.git", branch = "demo-ui" }

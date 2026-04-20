@@ -8,4 +8,4 @@ the Mellea ecosystem.
 
 ## Tools
 
-- **[Robustness Testing](docs/ROBUSTNESS_TESTING.md)** — Test m-program consistency against semantic variations using BenchDrift
+- **[Variation Testing](docs/VARIATION_TESTING.md)** — Test m-program consistency against semantic variations 
