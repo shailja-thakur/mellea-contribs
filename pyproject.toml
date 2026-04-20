@@ -29,7 +29,7 @@ dependencies = [
 
 [project.optional-dependencies]
 robustness = [
-  "benchdrift",
+  "benchdrift @ git+https://github.com/IBM/BenchDrift.git@demo-ui",
 ]
 
 [dependency-groups]
