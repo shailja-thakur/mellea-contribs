@@ -13,7 +13,7 @@ backend: "ollama"
 # Models
 # ====================
 
-target_model: "qwen2.5:3b"
+target_model: "granite3.3:8b"
   # Model for the m-program under test
   # Run: ollama pull granite3.3:8b
 
